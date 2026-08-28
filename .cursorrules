@@ -1,0 +1,151 @@
+# Tech-Doc-Intelligence — Cursor Rules
+
+You are building **Tech-Doc-Intelligence**: a dual-stack microservices system for technical document ingestion, embedding, retrieval, and Q&A.
+
+Always produce **complete, production-ready code**. No placeholders, TODOs, stubs, `pass`-only bodies, `NotImplementedException`, or "implement later" comments. If a dependency is required, wire it fully (config, DI, error paths, logging).
+
+---
+
+## 1. Architecture
+
+### Services
+
+| Service | Stack | Responsibility |
+|---------|--------|----------------|
+| **API Gateway / Backend** | .NET 8 Web API (C#) | Auth, orchestration, persistence, HTTP façade to clients |
+| **AI Microservice** | Python 3.11+ FastAPI | Embeddings, RAG, LangChain pipelines, vector search |
+| **Infra** | Docker Compose | PostgreSQL, Redis, Qdrant, service networking |
+
+### .NET (Clean Architecture)
+
+```
+src/
+  TechDocIntelligence.Api/           # Controllers, middleware, Program.cs
+  TechDocIntelligence.Application/   # Use cases, interfaces, validators, DTOs
+  TechDocIntelligence.Domain/        # Entities, value objects, domain events
+  TechDocIntelligence.Infrastructure/# EF Core, Redis, HTTP clients, external adapters
+```
+
+- Depend inward only: Api → Application → Domain; Infrastructure implements Application interfaces.
+- Register everything via DI in `Program.cs` / extension methods (`AddApplication()`, `AddInfrastructure()`).
+- Call the AI service only through **strongly typed** `HttpClient` + `IHttpClientFactory` (typed clients or `AddHttpClient<TClient, TImplementation>`). Never use raw untyped `HttpClient` ad hoc.
+- Prefer MediatR (or equivalent CQRS handlers) for application commands/queries.
+
+### Python AI Microservice
+
+```
+ai_service/
+  app/
+    api/           # FastAPI routers (async endpoints only)
+    core/          # settings, logging, lifespan
+    schemas/       # Pydantic v2 models (request/response contracts)
+    services/      # LangChain, embeddings, RAG orchestration
+    clients/       # Qdrant, OpenAI/Ollama, Redis helpers
+    repositories/  # persistence / vector store adapters
+  tests/
+```
+
+- Use **Pydantic v2** settings (`BaseSettings`) for config; never hardcode secrets.
+- Vector store: **Qdrant** and/or **pgvector** (PostgreSQL). Cache/session: **Redis**.
+- LLM providers: **Ollama** (local) and **OpenAI** behind a single abstraction; select via config.
+
+### Shared Contracts
+
+- Shared REST/JSON contracts between .NET and Python live in a versioned contract surface (OpenAPI from FastAPI exported; .NET DTOs mirror field names/types exactly).
+- Use `camelCase` JSON for public HTTP APIs unless an existing contract says otherwise.
+- Breaking changes require a new API version (`/v1`, `/v2`).
+
+---
+
+## 2. Code Standards
+
+### Python
+
+- **Strict typing**: annotate all function signatures and public attributes; code must be **mypy**-compatible (`disallow_untyped_defs` mindset).
+- Endpoints: `async def` only. Use `AsyncSession` / async HTTP / async Qdrant clients.
+- Prefer `httpx.AsyncClient` for outbound HTTP.
+- Exception handling: map domain errors to HTTP with clear status codes; never swallow exceptions silently. Use FastAPI exception handlers for consistent error bodies.
+- LangChain: keep chains/runnables in `services/`; routers stay thin.
+- Logging: structured (`structlog` or stdlib with JSON); include `request_id` / correlation id.
+
+```python
+# ✅ GOOD
+async def retrieve(query: str, top_k: int = 5) -> list[RetrievedChunk]:
+    ...
+
+# ❌ BAD
+def retrieve(query, top_k=5):
+    ...
+```
+
+### C#
+
+- Enable **nullable reference types** project-wide; treat warnings as errors where practical.
+- Follow **SOLID**; prefer interfaces in Application, implementations in Infrastructure.
+- **async/await** for all I/O; never `.Result` / `.Wait()` on async calls.
+- Validate DTOs with FluentValidation or data annotations + filter; reject invalid input at the API boundary.
+- Use `CancellationToken` on all async public methods and controller actions.
+- Prefer `record` / `record class` for DTOs; immutable where possible.
+
+```csharp
+// ✅ GOOD
+public async Task<Result<DocumentDto>> GetAsync(Guid id, CancellationToken ct)
+
+// ❌ BAD
+public DocumentDto Get(Guid id) => _http.GetFromJsonAsync<DocumentDto>(...).Result!;
+```
+
+### Cross-cutting
+
+- Correlation IDs on every request (propagate `X-Correlation-ID` between .NET ↔ Python).
+- Health checks: `/health` (liveness) and `/ready` (dependencies: DB, Redis, Qdrant, LLM).
+- Secrets via environment variables / user secrets / compose secrets — never commit credentials.
+- Idempotent writes where retries are expected (ingestion, embedding jobs).
+
+---
+
+## 3. Infrastructure & Docker
+
+- Provide `docker-compose.yml` with: `api` (.NET), `ai` (Python), `postgres`, `redis`, `qdrant`.
+- Services communicate on an internal Docker network; only expose necessary host ports.
+- Healthcheck each dependent service; app containers wait on healthy deps.
+- Connection strings and API keys from env; document required vars in `.env.example` (no real secrets).
+
+---
+
+## 4. API & Contract Rules
+
+- REST resources are nouns; use standard status codes (`200`, `201`, `204`, `400`, `401`, `404`, `409`, `422`, `502`).
+- Error response shape (both stacks):
+
+```json
+{
+  "type": "https://tools.ietf.org/html/rfc7807",
+  "title": "Validation failed",
+  "status": 422,
+  "detail": "Field 'query' must not be empty",
+  "traceId": "00-abc..."
+}
+```
+
+- When adding an AI endpoint, update: FastAPI schema + OpenAPI + matching .NET DTO + typed client method in the same change set.
+
+---
+
+## 5. Testing & Quality
+
+- .NET: unit tests for Application handlers; integration tests for API + DB where feasible.
+- Python: `pytest` + `pytest-asyncio`; mock LLM/vector clients in unit tests; contract tests for schemas.
+- Do not leave failing tests or disabled asserts.
+
+---
+
+## 6. Agent Output Behavior
+
+When generating or editing code for this repo:
+
+1. Match existing project structure and naming; if greenfield, use the layouts above.
+2. Ship full implementations: config, DI/wiring, validation, logging, error handling, and Docker pieces as needed for the feature to run.
+3. Prefer small, focused files over god-classes/modules.
+4. Do not invent alternate stacks (e.g., Flask, Dapper-only, sync FastAPI) unless the user explicitly requests a change.
+5. Keep comments rare and only for non-obvious intent; never narrate what the code does.

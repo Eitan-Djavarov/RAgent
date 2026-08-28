@@ -1,0 +1,42 @@
+@host = http://localhost:5000
+
+### Health
+GET {{host}}/api/health
+Accept: application/json
+
+### Create incident
+POST {{host}}/api/incidents
+Content-Type: application/json
+
+{
+  "title": "Payment API elevated latency",
+  "description": "p99 latency on /checkout exceeded 2s after the redis failover. Downstream timeouts observed on order-service.",
+  "systemName": "payments-api",
+  "severity": "high"
+}
+
+### Get incident
+GET {{host}}/api/incidents/00000000-0000-0000-0000-000000000000
+Accept: application/json
+
+### Ask / analyze with filters
+POST {{host}}/api/incidents/ask
+Content-Type: application/json
+
+{
+  "queryText": "What caused checkout latency after redis failover?",
+  "systemName": "Radar-APG",
+  "minSeverity": "High",
+  "topK": 4
+}
+
+### Analyze alias
+POST {{host}}/api/incidents/analyze
+Content-Type: application/json
+
+{
+  "queryText": "Summarize UAV RF jamming mitigations",
+  "systemName": "UAV-Link-X",
+  "minSeverity": "Medium",
+  "topK": 3
+}

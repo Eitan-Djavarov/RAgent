@@ -1,0 +1,64 @@
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+*.pfx
+*.pem
+secrets/
+
+# .NET
+backend-core/bin/
+backend-core/obj/
+backend-core/*.user
+backend-core/*.suo
+**/[Bb]in/
+**/[Oo]bj/
+**/[Dd]ebug/
+**/[Rr]elease/
+*.nupkg
+*.DotSettings.user
+TestResults/
+.vs/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+build/
+.venv/
+venv/
+.env.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.tox/
+*.log
+
+# Model / local caches
+.cache/
+models/
+*.pt
+*.bin
+!**/package-lock.json
+
+# Docker
+docker-data/
+
+# Misc
+*.tmp
+*.temp
+coverage/

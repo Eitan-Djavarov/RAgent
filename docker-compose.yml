@@ -1,0 +1,168 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: tdi-postgres
+    environment:
+      POSTGRES_DB: techdoc
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: techdoc_dev_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - tdi-network
+
+  qdrant:
+    image: qdrant/qdrant:v1.12.5
+    container_name: tdi-qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'cat < /dev/null > /dev/tcp/localhost/6333' || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - tdi-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: tdi-redis
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - tdi-network
+
+  ai-service:
+    build:
+      context: .
+      dockerfile: docker/ai.Dockerfile
+    container_name: tdi-ai-service
+    environment:
+      ENVIRONMENT: production
+      LOG_LEVEL: INFO
+      QDRANT_HOST: qdrant
+      QDRANT_PORT: "6333"
+      COLLECTION_NAME: tech_docs
+      EMBEDDING_MODEL: all-MiniLM-L6-v2
+      EMBEDDING_DIMENSION: "384"
+      RERANK_CANDIDATES: "10"
+      RERANK_TOP_N: "3"
+      ENABLE_RERANK: "true"
+      CROSS_ENCODER_MODEL: cross-encoder/ms-marco-MiniLM-L-6-v2
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: techdoc
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: techdoc_dev_password
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_DB: "0"
+      SEMANTIC_CACHE_ENABLED: "true"
+      SEMANTIC_CACHE_TTL_SECONDS: "3600"
+      SEMANTIC_CACHE_SIMILARITY_THRESHOLD: "0.92"
+      SESSION_MEMORY_TTL_SECONDS: "3600"
+      RATE_LIMIT_ENABLED: "true"
+      RATE_LIMIT_REQUESTS: "30"
+      RATE_LIMIT_WINDOW_SECONDS: "60"
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+    networks:
+      - tdi-network
+
+  backend-core:
+    build:
+      context: .
+      dockerfile: docker/backend.Dockerfile
+    container_name: tdi-backend-core
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_URLS: http://+:5000
+      ConnectionStrings__DefaultConnection: Host=postgres;Port=5432;Database=techdoc;Username=postgres;Password=techdoc_dev_password
+      AiService__BaseUrl: http://ai-service:8000
+      AiService__TimeoutSeconds: "120"
+      AiService__RetryCount: "2"
+    ports:
+      - "5000:5000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      ai-service:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:5000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+    networks:
+      - tdi-network
+
+  frontend-ui:
+    build:
+      context: .
+      dockerfile: frontend-ui/Dockerfile
+    container_name: tdi-frontend-ui
+    environment:
+      BACKEND_URL: http://backend-core:5000
+      AI_URL: http://ai-service:8000
+      QDRANT_URL: http://qdrant:6333
+      REDIS_URL: http://redis:6379
+      UI_REQUEST_TIMEOUT: "180"
+    ports:
+      - "8501:8501"
+    depends_on:
+      backend-core:
+        condition: service_started
+      ai-service:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - tdi-network
+
+networks:
+  tdi-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  qdrant_data:
