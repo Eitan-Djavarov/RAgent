@@ -140,6 +140,70 @@ class SemanticCache:
             raise
         return deleted
 
+    async def invalidate_document(self, document_id: str) -> int:
+        """Remove cache entries whose responses cite the given document id."""
+        if not self._enabled or not document_id.strip():
+            return 0
+
+        needle = document_id.strip().lower()
+        deleted = 0
+        try:
+            entry_ids = list(await self._redis.smembers(_INDEX_KEY))
+            for entry_id in entry_ids:
+                entry_key = f"{_ENTRY_PREFIX}{entry_id}"
+                raw = await self._redis.get(entry_key)
+                if not raw:
+                    await self._redis.srem(_INDEX_KEY, entry_id)
+                    continue
+                try:
+                    payload = json.loads(raw)
+                except json.JSONDecodeError:
+                    await self._redis.delete(entry_key)
+                    await self._redis.srem(_INDEX_KEY, entry_id)
+                    deleted += 1
+                    continue
+
+                if not self._response_references_document(payload.get("response"), needle):
+                    continue
+
+                keys = [entry_key]
+                exact_key = payload.get("exact_key")
+                if exact_key:
+                    keys.append(str(exact_key))
+                deleted += int(await self._redis.delete(*keys))
+                await self._redis.srem(_INDEX_KEY, entry_id)
+        except Exception:  # noqa: BLE001
+            logger.exception("Semantic cache document invalidation failed for %s", document_id)
+            raise
+        return deleted
+
+    @staticmethod
+    def _response_references_document(response: Any, document_id_lower: str) -> bool:
+        if not isinstance(response, dict):
+            return False
+        for field in ("citations", "sources"):
+            items = response.get(field) or []
+            if not isinstance(items, list):
+                continue
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                doc_id = str(item.get("documentId") or item.get("document_id") or "").lower()
+                if doc_id == document_id_lower:
+                    return True
+        analysis = response.get("analysis")
+        if isinstance(analysis, dict):
+            citations = analysis.get("sourceCitations") or analysis.get("source_citations") or []
+            if isinstance(citations, list):
+                for item in citations:
+                    if not isinstance(item, dict):
+                        continue
+                    doc_id = str(item.get("documentId") or item.get("document_id") or "").lower()
+                    if doc_id == document_id_lower:
+                        return True
+        blob = json.dumps(response, default=str).lower()
+        return document_id_lower in blob
+
     async def _lookup_exact(self, request: QueryRequest) -> QueryResponse | None:
         raw = await self._redis.get(self._exact_key(request))
         if not raw:

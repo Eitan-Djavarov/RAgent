@@ -49,7 +49,14 @@ public sealed class AiResponseMapperTests
                 RecommendedMitigations: "Disable debug ring; add RSS governor.",
                 SourceCitations:
                 [
-                    new AiSourceCitationDto("doc-1", "scratch arena high water 5.9GB", 0.93),
+                    new AiSourceCitationDto(
+                        "doc-1",
+                        "scratch arena high water 5.9GB",
+                        0.93,
+                        CitationIndex: 1,
+                        DocId: "doc-1",
+                        System: "Radar-APG",
+                        Severity: "High"),
                 ]),
             RetrievalMode: "hybrid+rerank",
             ToolUsed: "HYBRID_RAG");
@@ -66,7 +73,10 @@ public sealed class AiResponseMapperTests
         Assert.Null(mapped.SqlQueryResult);
         Assert.Single(mapped.Citations);
         Assert.Equal("doc-1", mapped.Citations[0].DocumentId);
-        Assert.Contains("scratch arena", mapped.Citations[0].ChunkText, StringComparison.Ordinal);
+        Assert.Equal(1, mapped.Citations[0].CitationIndex);
+        Assert.Equal("doc-1", mapped.Citations[0].DocId);
+        Assert.Equal("High", mapped.Citations[0].Severity);
+        Assert.Equal("Radar-APG", mapped.Citations[0].System);
     }
 
     [Fact]

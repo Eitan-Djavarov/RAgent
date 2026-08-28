@@ -35,6 +35,16 @@ class Settings(BaseSettings):
 
     chunk_size: int = Field(default=500, ge=100, alias="CHUNK_SIZE")
     chunk_overlap: int = Field(default=50, ge=0, alias="CHUNK_OVERLAP")
+    parent_chunk_size: int = Field(default=900, ge=200, alias="PARENT_CHUNK_SIZE")
+    parent_chunk_overlap: int = Field(default=100, ge=0, alias="PARENT_CHUNK_OVERLAP")
+    child_chunk_size: int = Field(default=200, ge=50, alias="CHILD_CHUNK_SIZE")
+    child_chunk_overlap: int = Field(default=40, ge=0, alias="CHILD_CHUNK_OVERLAP")
+    min_retrieval_score: float = Field(
+        default=0.40,
+        ge=0.0,
+        le=1.0,
+        alias="MIN_RETRIEVAL_SCORE",
+    )
     default_top_k: int = Field(default=3, ge=1, le=20, alias="DEFAULT_TOP_K")
 
     hybrid_dense_top_k: int = Field(default=20, ge=5, le=100, alias="HYBRID_DENSE_TOP_K")
@@ -76,6 +86,13 @@ class Settings(BaseSettings):
     rate_limit_enabled: bool = Field(default=True, alias="RATE_LIMIT_ENABLED")
     rate_limit_requests: int = Field(default=30, ge=1, alias="RATE_LIMIT_REQUESTS")
     rate_limit_window_seconds: int = Field(default=60, ge=1, alias="RATE_LIMIT_WINDOW_SECONDS")
+    grounding_enabled: bool = Field(default=True, alias="GROUNDING_ENABLED")
+    grounding_threshold: float = Field(default=0.8, ge=0.0, le=1.0, alias="GROUNDING_THRESHOLD")
+    grounding_llm_timeout_seconds: float = Field(
+        default=8.0,
+        ge=1.0,
+        alias="GROUNDING_LLM_TIMEOUT_SECONDS",
+    )
 
     @computed_field  # type: ignore[prop-decorator]
     @property

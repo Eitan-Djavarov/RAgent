@@ -10,6 +10,8 @@ from app.agent.orchestrator import AgenticOrchestrator
 from app.models.schemas import (
     AskIncidentRequest,
     CacheClearResponse,
+    DocumentDeleteResponse,
+    DocumentListResponse,
     FileIngestResponse,
     IngestRequest,
     IngestResponse,
@@ -20,6 +22,7 @@ from app.models.schemas import (
 )
 from app.cache.semantic_cache import SemanticCache
 from app.cache.session_memory import SessionMemory
+from app.rag.document_management import DocumentManagementService
 from app.rag.file_ingestion import FileIngestionService
 from app.rag.pipeline import RagPipeline
 from app.security.deps import enforce_guardrails, extract_query_text
@@ -75,6 +78,16 @@ def _get_session_memory(request: Request) -> SessionMemory:
             detail="Session memory is not initialized.",
         )
     return memory
+
+
+def _get_document_management(request: Request) -> DocumentManagementService:
+    service = getattr(request.app.state, "document_management", None)
+    if service is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Document management service is not initialized.",
+        )
+    return service
 
 
 def _parse_tags(raw: str | None) -> list[str]:
@@ -266,6 +279,53 @@ async def analyze_incidents(payload: QueryRequest, request: Request) -> QueryRes
                     source_citations=result.sources,
                 )
             }
+        )
+    return result
+
+
+@router.get(
+    "/documents",
+    response_model=DocumentListResponse,
+    status_code=status.HTTP_200_OK,
+    summary="List indexed incident documents with metadata",
+)
+async def list_documents(request: Request) -> DocumentListResponse:
+    service = _get_document_management(request)
+    try:
+        documents = await service.list_documents()
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Failed to list documents: {exc}",
+        ) from exc
+    return DocumentListResponse(documents=documents, count=len(documents))
+
+
+@router.delete(
+    "/documents/{document_id}",
+    response_model=DocumentDeleteResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Cascade-delete a document from Qdrant, Postgres, and semantic cache",
+)
+async def delete_document(document_id: str, request: Request) -> DocumentDeleteResponse:
+    service = _get_document_management(request)
+    try:
+        result = await service.delete_document(document_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Failed to delete document: {exc}",
+        ) from exc
+
+    if result.status == "not_found":
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=result.message,
         )
     return result
 

@@ -1,0 +1,43 @@
+"""Compatibility re-export. Canonical definitions live in ``app.schemas``."""
+
+from app.schemas import (
+    ApiModel,
+    AskIncidentRequest,
+    CacheClearResponse,
+    DocumentDeleteResponse,
+    DocumentListItem,
+    DocumentListResponse,
+    FileIngestResponse,
+    HealthResponse,
+    IngestRequest,
+    IngestResponse,
+    ProblemDetails,
+    QueryRequest,
+    QueryResponse,
+    SessionClearResponse,
+    SourceCitation,
+    SqlQueryResult,
+    StructuredIncidentAnalysis,
+    to_camel,
+)
+
+__all__ = [
+    "ApiModel",
+    "AskIncidentRequest",
+    "CacheClearResponse",
+    "DocumentDeleteResponse",
+    "DocumentListItem",
+    "DocumentListResponse",
+    "FileIngestResponse",
+    "HealthResponse",
+    "IngestRequest",
+    "IngestResponse",
+    "ProblemDetails",
+    "QueryRequest",
+    "QueryResponse",
+    "SessionClearResponse",
+    "SourceCitation",
+    "SqlQueryResult",
+    "StructuredIncidentAnalysis",
+    "to_camel",
+]

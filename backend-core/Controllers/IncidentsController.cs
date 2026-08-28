@@ -214,6 +214,41 @@ public sealed class IncidentsController : ControllerBase
     }
 
     /// <summary>
+    /// Cascade-deletes an incident document from Postgres, Qdrant, and semantic cache.
+    /// </summary>
+    [HttpDelete("{id:guid}")]
+    [ProducesResponseType(typeof(DocumentDeleteResponseDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status502BadGateway)]
+    public async Task<ActionResult<DocumentDeleteResponseDto>> DeleteAsync(
+        Guid id,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var result = await _incidentService.DeleteAsync(id, cancellationToken);
+            if (!result.Success || string.Equals(result.Status, "not_found", StringComparison.OrdinalIgnoreCase))
+            {
+                return NotFound(
+                    new ProblemDetailsDto(
+                        "https://httpstatuses.com/404",
+                        "Document not found",
+                        StatusCodes.Status404NotFound,
+                        result.Message,
+                        HttpContext.TraceIdentifier));
+            }
+
+            return Ok(result);
+        }
+        catch (AiServiceException ex)
+        {
+            _logger.LogError(ex, "AI document delete failed for {IncidentId}", id);
+            var problem = AiErrorMapper.ToProblemDetails(ex, HttpContext.TraceIdentifier, "AI delete error");
+            return StatusCode(problem.Status, problem);
+        }
+    }
+
+    /// <summary>
     /// Fetches a persisted incident report by id.
     /// </summary>
     [HttpGet("{id:guid}")]

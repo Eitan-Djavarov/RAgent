@@ -1,15 +1,21 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import time
 from collections.abc import AsyncIterator
 from typing import Any
 
+from app.agent.grounding_guard import GroundingGuard, GroundingResult
 from app.agent.query_rewriter import QueryRewriter
+from app.agent.response_assembly import (
+    format_sql_rows,
+    grounding_event_fields,
+    merge_tool_responses,
+)
 from app.agent.router import ExecutionStrategy, classify_intent
 from app.agent.sql_tool import ReadOnlyIncidentSqlTool
+from app.agent.sse import format_sse
 from app.cache.semantic_cache import SemanticCache
 from app.cache.session_memory import SessionMemory
 from app.models.schemas import (
@@ -17,7 +23,6 @@ from app.models.schemas import (
     QueryResponse,
     SourceCitation,
     SqlQueryResult,
-    StructuredIncidentAnalysis,
 )
 from app.rag.pipeline import RagPipeline
 
@@ -25,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 
 def _sse(payload: dict[str, Any]) -> str:
-    return f"data: {json.dumps(payload, default=str)}\n\n"
+    return format_sse(payload)
 
 
 class AgenticOrchestrator:
@@ -38,12 +43,14 @@ class AgenticOrchestrator:
         semantic_cache: SemanticCache | None = None,
         session_memory: SessionMemory | None = None,
         query_rewriter: QueryRewriter | None = None,
+        grounding_guard: GroundingGuard | None = None,
     ) -> None:
         self._rag = rag_pipeline
         self._sql = sql_tool
         self._cache = semantic_cache
         self._session_memory = session_memory
         self._rewriter = query_rewriter
+        self._grounding = grounding_guard
 
     async def ask(self, request: QueryRequest) -> QueryResponse:
         original_query = request.query.strip()
@@ -82,6 +89,7 @@ class AgenticOrchestrator:
                 "rewritten_query": rewritten_query,
             }
         )
+        response = await self._apply_grounding(effective.query, response)
 
         if self._cache is not None and self._cache.enabled:
             await self._cache.store(effective, response)
@@ -236,6 +244,7 @@ class AgenticOrchestrator:
             original_query=original_query,
             rewritten_query=rewritten_query,
         )
+        response = await self._apply_grounding(effective.query, response)
 
         yield _sse(
             {
@@ -249,6 +258,7 @@ class AgenticOrchestrator:
                 "sessionId": session_id,
                 "originalQuery": original_query,
                 "rewrittenQuery": rewritten_query,
+                **self._grounding_event_fields(response),
             }
         )
 
@@ -275,6 +285,7 @@ class AgenticOrchestrator:
                     if response.sql_query_result is not None
                     else None
                 ),
+                **self._grounding_event_fields(response),
             }
         )
         text = response.answer or response.summary or ""
@@ -294,6 +305,7 @@ class AgenticOrchestrator:
                 "sessionId": response.session_id,
                 "originalQuery": response.original_query,
                 "rewrittenQuery": response.rewritten_query,
+                **self._grounding_event_fields(response),
             }
         )
 
@@ -405,6 +417,47 @@ class AgenticOrchestrator:
         latency_ms = round((time.perf_counter() - started) * 1000.0, 2)
         return self._merge(strategy, rag_response, sql_result, latency_ms)
 
+    async def _apply_grounding(self, query: str, response: QueryResponse) -> QueryResponse:
+        if self._grounding is None:
+            return response
+        if response.tool_used == ExecutionStrategy.SQL_METRICS.value:
+            return response.model_copy(
+                update={
+                    "faithfulness_score": None,
+                    "is_grounded": None,
+                    "unsupported_claims": None,
+                }
+            )
+
+        sources = response.citations or response.sources or []
+        try:
+            result = await self._grounding.evaluate(
+                query=query,
+                answer=response.answer or response.summary or "",
+                sources=list(sources),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Grounding evaluation failed: %s", exc)
+            result = GroundingResult(
+                faithfulness_score=0.0,
+                is_grounded=False,
+                unsupported_claims=["Grounding evaluation unavailable."],
+                supported_claims=[],
+                evaluation_mode="error",
+            )
+
+        return response.model_copy(
+            update={
+                "faithfulness_score": result.faithfulness_score,
+                "is_grounded": result.is_grounded,
+                "unsupported_claims": result.unsupported_claims,
+            }
+        )
+
+    @staticmethod
+    def _grounding_event_fields(response: QueryResponse) -> dict[str, Any]:
+        return grounding_event_fields(response)
+
     def _merge(
         self,
         strategy: ExecutionStrategy,
@@ -412,102 +465,8 @@ class AgenticOrchestrator:
         sql_result: SqlQueryResult | None,
         latency_ms: float,
     ) -> QueryResponse:
-        if rag_response is not None and strategy != ExecutionStrategy.SQL_METRICS:
-            analysis = rag_response.analysis
-            summary = analysis.executive_summary if analysis else rag_response.answer
-            root_cause = (
-                analysis.root_cause_analysis
-                if analysis
-                else "See answer body for root-cause details."
-            )
-            action_items = (
-                analysis.recommended_mitigations
-                if analysis
-                else "See answer body for recommended actions."
-            )
-            citations = rag_response.sources
-
-            if sql_result is not None and strategy == ExecutionStrategy.HYBRID_COMBINED:
-                summary = (
-                    f"{summary}\n\nSQL metrics: {sql_result.interpretation}"
-                ).strip()
-                answer = (
-                    f"{rag_response.answer}\n\n"
-                    f"## SQL Metrics\n{sql_result.interpretation}\n"
-                    f"Query: `{sql_result.query}`"
-                )
-            else:
-                answer = rag_response.answer
-
-            return QueryResponse(
-                answer=answer,
-                sources=citations,
-                latency_ms=latency_ms,
-                analysis=analysis,
-                retrieval_mode=rag_response.retrieval_mode,
-                tool_used=strategy.value,
-                sql_query_result=sql_result,
-                summary=summary,
-                root_cause=root_cause,
-                action_items=action_items,
-                citations=citations,
-                cached=False,
-            )
-
-        interpretation = (
-            sql_result.interpretation
-            if sql_result is not None
-            else "No SQL metrics were produced."
-        )
-        rows_preview = self._format_rows(sql_result.rows if sql_result else [])
-        summary = interpretation
-        root_cause = (
-            "Not applicable for pure metrics queries. "
-            "Use an analytical question to retrieve root-cause evidence from reports."
-        )
-        action_items = (
-            "Review the SQL metrics result set and open matching incident reports for deeper analysis."
-        )
-        answer = (
-            "## Executive Summary\n"
-            f"{summary}\n\n"
-            "## Root Cause Analysis\n"
-            f"{root_cause}\n\n"
-            "## Recommended Mitigation / Corrective Actions\n"
-            f"{action_items}\n\n"
-            "## SQL Metrics\n"
-            f"{rows_preview}"
-        )
-        empty_citations: list[SourceCitation] = []
-        analysis = StructuredIncidentAnalysis(
-            executive_summary=summary,
-            root_cause_analysis=root_cause,
-            recommended_mitigations=action_items,
-            source_citations=empty_citations,
-        )
-        return QueryResponse(
-            answer=answer,
-            sources=empty_citations,
-            latency_ms=latency_ms,
-            analysis=analysis,
-            retrieval_mode="sql-metrics",
-            tool_used=ExecutionStrategy.SQL_METRICS.value,
-            sql_query_result=sql_result,
-            summary=summary,
-            root_cause=root_cause,
-            action_items=action_items,
-            citations=empty_citations,
-            cached=False,
-        )
+        return merge_tool_responses(strategy, rag_response, sql_result, latency_ms)
 
     @staticmethod
     def _format_rows(rows: list[dict[str, Any]]) -> str:
-        if not rows:
-            return "_No rows returned._"
-        lines: list[str] = []
-        for index, row in enumerate(rows[:20], start=1):
-            rendered = ", ".join(f"{key}={value}" for key, value in row.items())
-            lines.append(f"{index}. {rendered}")
-        if len(rows) > 20:
-            lines.append(f"... ({len(rows) - 20} more rows)")
-        return "\n".join(lines)
+        return format_sql_rows(rows)

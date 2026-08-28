@@ -22,6 +22,11 @@ def settings() -> Settings:
         EMBEDDING_DIMENSION=3,
         CHUNK_SIZE=500,
         CHUNK_OVERLAP=50,
+        PARENT_CHUNK_SIZE=400,
+        PARENT_CHUNK_OVERLAP=50,
+        CHILD_CHUNK_SIZE=150,
+        CHILD_CHUNK_OVERLAP=30,
+        MIN_RETRIEVAL_SCORE=0.10,
         DEFAULT_TOP_K=3,
         RERANK_CANDIDATES=10,
         RERANK_TOP_N=3,
@@ -133,6 +138,11 @@ async def test_query_hybrid_retrieve_and_heuristic_structured_answer(
             "Root cause was RF jamming on UAV-Link-X. "
             "Mitigation steps include enabling anti-jam hop profile PROFILE_AJ_B."
         ),
+        "parent_id": "doc-42::parent::0",
+        "parent_text": (
+            "Root cause was RF jamming on UAV-Link-X during waypoint WP-17. "
+            "Mitigation steps include enabling anti-jam hop profile PROFILE_AJ_B."
+        ),
     }
     fake_qdrant.search.return_value = [hit]
 
@@ -217,6 +227,11 @@ async def test_health_and_endpoints_with_test_client(
         "document_id": "doc-1",
         "chunk_text": (
             "Hybrid RAG combines dense and BM25 signals. "
+            "Root cause analysis uses retrieved reports. Mitigation: enable reranking."
+        ),
+        "parent_id": "doc-1::parent::0",
+        "parent_text": (
+            "Hybrid RAG combines dense and BM25 signals for aerospace incident retrieval. "
             "Root cause analysis uses retrieved reports. Mitigation: enable reranking."
         ),
     }

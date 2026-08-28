@@ -48,12 +48,16 @@ htmlcov/
 .tox/
 *.log
 
-# Model / local caches
+# Model / local caches (ML weights — not app source packages)
 .cache/
-models/
+/models/
 *.pt
 *.bin
 !**/package-lock.json
+!ai-service/app/models/
+!ai-service/app/models/**
+!backend-core/Models/
+!backend-core/Models/**
 
 # Docker
 docker-data/

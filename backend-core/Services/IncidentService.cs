@@ -6,29 +6,6 @@ using TechDocIntelligence.Backend.Models.DTOs;
 
 namespace TechDocIntelligence.Backend.Services;
 
-public interface IIncidentService
-{
-    Task<IncidentReportDto> CreateAsync(
-        CreateIncidentRequestDto request,
-        CancellationToken cancellationToken = default);
-
-    Task<IncidentReportDto?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default);
-
-    Task<IReadOnlyList<IncidentReportDto>> ListAsync(CancellationToken cancellationToken = default);
-
-    Task<AskIncidentResponseDto> AnalyzeIncidentAsync(
-        AskIncidentQueryDto request,
-        CancellationToken cancellationToken = default);
-
-    Task<FileIngestResponseDto> UploadDocumentAsync(
-        IFormFile file,
-        string? title,
-        string system,
-        string severity,
-        string? subsystemTags,
-        CancellationToken cancellationToken = default);
-}
-
 public sealed class IncidentService : IIncidentService
 {
     private readonly AppDbContext _dbContext;
@@ -63,8 +40,8 @@ public sealed class IncidentService : IIncidentService
         await _dbContext.SaveChangesAsync(cancellationToken);
 
         var chunksIndexed = 0;
-        var ingestContent = BuildIngestContent(entity, request.SubsystemTags);
-        var metadata = BuildMetadata(entity, request.SubsystemTags);
+        var ingestContent = IncidentMapping.BuildIngestContent(entity, request.SubsystemTags);
+        var metadata = IncidentMapping.BuildMetadata(entity, request.SubsystemTags);
 
         try
         {
@@ -103,7 +80,7 @@ public sealed class IncidentService : IIncidentService
             await _dbContext.SaveChangesAsync(cancellationToken);
         }
 
-        return Map(entity, chunksIndexed);
+        return IncidentMapping.Map(entity, chunksIndexed);
     }
 
     public async Task<IncidentReportDto?> GetByIdAsync(
@@ -114,7 +91,7 @@ public sealed class IncidentService : IIncidentService
             .AsNoTracking()
             .FirstOrDefaultAsync(incident => incident.Id == id, cancellationToken);
 
-        return entity is null ? null : Map(entity, chunksIndexed: 0);
+        return entity is null ? null : IncidentMapping.Map(entity, chunksIndexed: 0);
     }
 
     public async Task<IReadOnlyList<IncidentReportDto>> ListAsync(
@@ -126,7 +103,7 @@ public sealed class IncidentService : IIncidentService
             .Take(500)
             .ToListAsync(cancellationToken);
 
-        return entities.Select(entity => Map(entity, chunksIndexed: 0)).ToList();
+        return entities.Select(entity => IncidentMapping.Map(entity, chunksIndexed: 0)).ToList();
     }
 
     public async Task<AskIncidentResponseDto> AnalyzeIncidentAsync(
@@ -134,7 +111,8 @@ public sealed class IncidentService : IIncidentService
         CancellationToken cancellationToken = default)
     {
         var analysis = await _aiServiceClient.QueryIncidentsAsync(request, cancellationToken);
-        var filteredCitations = await ApplyMinSeverityFilterAsync(
+        var filteredCitations = await IncidentMapping.ApplyMinSeverityFilterAsync(
+            _dbContext,
             analysis.Citations,
             request.MinSeverity,
             cancellationToken);
@@ -180,100 +158,54 @@ public sealed class IncidentService : IIncidentService
         return result;
     }
 
-    private async Task<IReadOnlyList<IncidentCitationDto>> ApplyMinSeverityFilterAsync(
-        IReadOnlyList<IncidentCitationDto> citations,
-        string? minSeverity,
-        CancellationToken cancellationToken)
+    public async Task<DocumentDeleteResponseDto> DeleteAsync(
+        Guid id,
+        CancellationToken cancellationToken = default)
     {
-        if (!AiResponseMapper.TryParseSeverity(minSeverity, out var minimum)
-            || citations.Count == 0)
+        DocumentDeleteResponseDto result;
+        try
         {
-            return citations;
+            result = await _aiServiceClient.DeleteDocumentAsync(id, cancellationToken);
+        }
+        catch (AiServiceException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            result = new DocumentDeleteResponseDto(
+                Success: false,
+                DocumentId: id.ToString("D"),
+                Status: "not_found",
+                VectorsDeleted: 0,
+                PostgresDeleted: false,
+                CacheEntriesInvalidated: 0,
+                Message: ex.Message);
         }
 
-        var documentIds = citations
-            .Select(citation => Guid.TryParse(citation.DocumentId, out var id) ? id : Guid.Empty)
-            .Where(id => id != Guid.Empty)
-            .Distinct()
-            .ToList();
-
-        if (documentIds.Count == 0)
+        var local = await _dbContext.Incidents.FirstOrDefaultAsync(
+            incident => incident.Id == id,
+            cancellationToken);
+        if (local is not null)
         {
-            return citations;
-        }
-
-        var severityById = await _dbContext.Incidents
-            .AsNoTracking()
-            .Where(incident => documentIds.Contains(incident.Id))
-            .Select(incident => new { incident.Id, incident.Severity })
-            .ToDictionaryAsync(row => row.Id, row => row.Severity, cancellationToken);
-
-        return citations
-            .Where(citation =>
+            _dbContext.Incidents.Remove(local);
+            await _dbContext.SaveChangesAsync(cancellationToken);
+            if (!result.PostgresDeleted)
             {
-                if (!Guid.TryParse(citation.DocumentId, out var id))
+                result = result with
                 {
-                    return true;
-                }
-
-                if (!severityById.TryGetValue(id, out var severity))
-                {
-                    return true;
-                }
-
-                return severity >= minimum;
-            })
-            .ToList();
-    }
-
-    private static Dictionary<string, string?> BuildMetadata(
-        IncidentEntity entity,
-        IReadOnlyList<string>? subsystemTags)
-    {
-        var metadata = new Dictionary<string, string?>
-        {
-            ["type"] = "incident",
-            ["systemName"] = entity.SystemName,
-            ["severity"] = entity.Severity.ToString(),
-        };
-
-        if (subsystemTags is { Count: > 0 })
-        {
-            metadata["subsystemTags"] = string.Join(",", subsystemTags.Select(tag => tag.Trim())
-                .Where(tag => !string.IsNullOrWhiteSpace(tag)));
+                    PostgresDeleted = true,
+                    Success = true,
+                    Status = "deleted",
+                    Message = result.Message + " Local Postgres row removed by backend.",
+                };
+            }
         }
 
-        return metadata;
+        _logger.LogInformation(
+            "Deleted incident {IncidentId}: vectors={Vectors}, postgres={Postgres}, cache={Cache}, status={Status}",
+            id,
+            result.VectorsDeleted,
+            result.PostgresDeleted,
+            result.CacheEntriesInvalidated,
+            result.Status);
+
+        return result;
     }
-
-    private static string BuildIngestContent(
-        IncidentEntity entity,
-        IReadOnlyList<string>? subsystemTags)
-    {
-        var tags = subsystemTags is { Count: > 0 }
-            ? string.Join(", ", subsystemTags)
-            : "n/a";
-
-        return $"""
-            Incident Report
-            Title: {entity.Title}
-            System: {entity.SystemName}
-            Severity: {entity.Severity}
-            Subsystem Tags: {tags}
-            Description:
-            {entity.Description}
-            """;
-    }
-
-    private static IncidentReportDto Map(IncidentEntity entity, int chunksIndexed) =>
-        new(
-            entity.Id,
-            entity.Title,
-            entity.Description,
-            entity.SystemName,
-            entity.Severity,
-            entity.CreatedAt,
-            entity.IndexedAt,
-            chunksIndexed,
-            entity.IngestionMessage);
 }

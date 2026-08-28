@@ -46,10 +46,15 @@ public static class AiResponseMapper
             ?? response.Sources;
 
         var citations = citationSource
-            .Select(source => new IncidentCitationDto(
-                source.DocumentId,
-                source.ChunkText,
-                source.Score))
+            .Select((source, index) => new IncidentCitationDto(
+                DocumentId: source.DocumentId,
+                ChunkText: source.ChunkText,
+                Score: source.Score,
+                CitationIndex: source.CitationIndex ?? (index + 1),
+                DocId: source.DocId ?? source.DocumentId,
+                System: source.System,
+                Severity: source.Severity,
+                ParentId: source.ParentId))
             .ToList();
 
         SqlQueryResultDto? sqlResult = null;
@@ -91,7 +96,10 @@ public static class AiResponseMapper
                 Cached: response.Cached,
                 SessionId: response.SessionId,
                 OriginalQuery: response.OriginalQuery,
-                RewrittenQuery: response.RewrittenQuery);
+                RewrittenQuery: response.RewrittenQuery,
+                FaithfulnessScore: response.FaithfulnessScore,
+                IsGrounded: response.IsGrounded,
+                UnsupportedClaims: response.UnsupportedClaims);
         }
 
         var parsed = ParseMarkdownSections(response.Answer);
@@ -108,7 +116,10 @@ public static class AiResponseMapper
             Cached: response.Cached,
             SessionId: response.SessionId,
             OriginalQuery: response.OriginalQuery,
-            RewrittenQuery: response.RewrittenQuery);
+            RewrittenQuery: response.RewrittenQuery,
+            FaithfulnessScore: response.FaithfulnessScore,
+            IsGrounded: response.IsGrounded,
+            UnsupportedClaims: response.UnsupportedClaims);
     }
 
     public static bool TryParseSeverity(string? value, out IncidentSeverity severity)

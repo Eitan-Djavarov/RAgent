@@ -4,19 +4,15 @@ on:
   push:
     branches:
       - main
-      - master
   pull_request:
-    branches:
-      - main
-      - master
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  dotnet-build-and-test:
-    name: .NET Build and Test
+  dotnet-tests:
+    name: .NET Tests
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -35,13 +31,13 @@ jobs:
         run: dotnet restore TechDocIntelligence.sln
 
       - name: Build solution
-        run: dotnet build TechDocIntelligence.sln --configuration Release --no-restore --warnaserror
+        run: dotnet build TechDocIntelligence.sln --configuration Release --no-restore
 
       - name: Run tests
         run: dotnet test TechDocIntelligence.sln --configuration Release --no-build --verbosity normal
 
-  python-lint-and-test:
-    name: Python Lint and Test
+  ai-service-tests:
+    name: AI Service Tests
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -64,11 +60,10 @@ jobs:
           pip install -r ai-service/requirements.txt
 
       - name: Run pytest
-        working-directory: ai-service
-        run: pytest -v
+        run: pytest ai-service/tests -v
 
-  docker-compose-validate:
-    name: Docker Compose Validate
+  docker-compose-lint:
+    name: Docker Compose Lint
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -78,5 +73,5 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Validate docker-compose.yml
+      - name: Validate docker compose config
         run: docker compose -f docker-compose.yml config

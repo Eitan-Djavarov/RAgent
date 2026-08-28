@@ -33,5 +33,9 @@ public interface IAiServiceClient
         AskIncidentQueryDto request,
         CancellationToken cancellationToken = default);
 
+    Task<DocumentDeleteResponseDto> DeleteDocumentAsync(
+        Guid documentId,
+        CancellationToken cancellationToken = default);
+
     Task<bool> IsHealthyAsync(CancellationToken cancellationToken = default);
 }

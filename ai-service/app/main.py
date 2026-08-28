@@ -15,11 +15,13 @@ from app.agent.orchestrator import AgenticOrchestrator
 from app.agent.sql_tool import ReadOnlyIncidentSqlTool
 from app.cache.semantic_cache import SemanticCache
 from app.cache.session_memory import SessionMemory
+from app.agent.grounding_guard import GroundingGuard
 from app.agent.query_rewriter import QueryRewriter
 from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.models.schemas import HealthResponse, ProblemDetails
 from app.rag.file_ingestion import FileIngestionService
+from app.rag.document_management import DocumentManagementService
 from app.rag.pipeline import get_rag_pipeline
 from app.security.deps import RateLimitMiddleware, security_problem
 from app.security.guardrails import (
@@ -52,6 +54,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         enabled=settings.rate_limit_enabled,
     )
     query_rewriter = QueryRewriter(settings)
+    grounding_guard = GroundingGuard(settings) if settings.grounding_enabled else None
     app.state.rag_pipeline = pipeline
     app.state.redis = redis_client
     app.state.semantic_cache = semantic_cache
@@ -59,16 +62,23 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.rate_limiter = rate_limiter
     app.state.guardrails = InputSecurityGuardrails()
     app.state.file_ingestion = FileIngestionService(settings, pipeline)
+    app.state.document_management = DocumentManagementService(
+        settings=settings,
+        pipeline=pipeline,
+        semantic_cache=semantic_cache,
+    )
     app.state.orchestrator = AgenticOrchestrator(
         rag_pipeline=pipeline,
         sql_tool=ReadOnlyIncidentSqlTool(settings),
         semantic_cache=semantic_cache,
         session_memory=session_memory,
         query_rewriter=query_rewriter,
+        grounding_guard=grounding_guard,
     )
     yield
     app.state.rag_pipeline = None
     app.state.file_ingestion = None
+    app.state.document_management = None
     app.state.orchestrator = None
     app.state.semantic_cache = None
     app.state.session_memory = None

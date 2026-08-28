@@ -6,40 +6,6 @@ using TechDocIntelligence.Backend.Models.DTOs;
 
 namespace TechDocIntelligence.Backend.Clients;
 
-public sealed class AiServiceException : Exception
-{
-    public AiServiceException(
-        string message,
-        HttpStatusCode? statusCode = null,
-        string? responseBody = null,
-        IReadOnlyDictionary<string, string>? responseHeaders = null)
-        : base(message)
-    {
-        StatusCode = statusCode;
-        ResponseBody = responseBody;
-        ResponseHeaders = responseHeaders;
-    }
-
-    public AiServiceException(
-        string message,
-        Exception innerException,
-        HttpStatusCode? statusCode = null,
-        string? responseBody = null,
-        IReadOnlyDictionary<string, string>? responseHeaders = null)
-        : base(message, innerException)
-    {
-        StatusCode = statusCode;
-        ResponseBody = responseBody;
-        ResponseHeaders = responseHeaders;
-    }
-
-    public HttpStatusCode? StatusCode { get; }
-
-    public string? ResponseBody { get; }
-
-    public IReadOnlyDictionary<string, string>? ResponseHeaders { get; }
-}
-
 public sealed class AiServiceClient : IAiServiceClient
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -180,6 +146,18 @@ public sealed class AiServiceClient : IAiServiceClient
         return response;
     }
 
+    public Task<DocumentDeleteResponseDto> DeleteDocumentAsync(
+        Guid documentId,
+        CancellationToken cancellationToken = default)
+    {
+        return SendAsync<object?, DocumentDeleteResponseDto>(
+            HttpMethod.Delete,
+            $"api/v1/documents/{documentId:D}",
+            null,
+            "delete-document",
+            cancellationToken);
+    }
+
     public async Task<bool> IsHealthyAsync(CancellationToken cancellationToken = default)
     {
         try
@@ -206,10 +184,12 @@ public sealed class AiServiceClient : IAiServiceClient
             operationName,
             async ct =>
             {
-                using var requestMessage = new HttpRequestMessage(method, path)
+                using var requestMessage = new HttpRequestMessage(method, path);
+                if (payload is not null)
                 {
-                    Content = JsonContent.Create(payload, options: JsonOptions),
-                };
+                    requestMessage.Content = JsonContent.Create(payload, options: JsonOptions);
+                }
+
                 if (payload is AiQueryRequestDto queryRequest
                     && !string.IsNullOrWhiteSpace(queryRequest.SessionId))
                 {
