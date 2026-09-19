@@ -69,7 +69,7 @@ GitHub Actions (`.github/workflows/ci.yml`) on `push` to `main` and all PRs:
 backend-core/          .NET 8 API
 backend-core.Tests/    .NET unit/integration tests
 ai-service/            FastAPI RAG microservice + tests/
-frontend-ui/           Streamlit UI
+frontend-ui/           Streamlit UI (dumb presentation layer: main/config/api/state/components)
 docker/                Dockerfiles and Postgres init
 .github/workflows/     CI pipeline
 docker-compose.yml     Full local stack

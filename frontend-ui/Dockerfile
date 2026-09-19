@@ -18,7 +18,7 @@ COPY frontend-ui/requirements.txt .
 RUN pip install --upgrade pip \
     && pip install -r requirements.txt
 
-COPY frontend-ui/app.py .
+COPY frontend-ui/ .
 
 EXPOSE 8501
 
